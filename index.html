@@ -98,6 +98,18 @@
         <span class="record-label" id="record-label">開始錄音</span>
       </button>
 
+      <!-- 上傳音檔按鈕 -->
+      <button class="btn-upload" id="btn-upload" title="上傳音檔（mp3 / wav / m4a）">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/>
+          <line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+        <span>上傳音檔</span>
+      </button>
+      <!-- 隱藏的 file input -->
+      <input type="file" id="file-input" accept=".mp3,.wav,.m4a,.ogg,.flac,.mp4,.webm" style="display:none" />
+
       <!-- 狀態文字 -->
       <div class="record-status" id="record-status"></div>
     </div>

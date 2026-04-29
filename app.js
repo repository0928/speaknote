@@ -41,6 +41,8 @@ const elSidebarToggle = $('sidebar-toggle');
 const elSidebar      = $('sidebar');
 const elLangSelect   = $('lang-select');
 const elToast        = $('toast');
+const elBtnUpload    = $('btn-upload');
+const elFileInput    = $('file-input');
 
 // =====================================================
 // 工具函式
@@ -419,6 +421,76 @@ elBtnDelete.addEventListener('click', () => deleteNote(activeNoteId));
 elSidebarToggle.addEventListener('click', () => {
   elSidebar.classList.toggle('collapsed');
 });
+
+// 上傳音檔按鈕 → 觸發 file input
+elBtnUpload.addEventListener('click', () => {
+  if (!elBtnUpload.disabled) elFileInput.click();
+});
+
+// 選取檔案後送出
+elFileInput.addEventListener('change', () => {
+  const file = elFileInput.files[0];
+  if (file) handleFileUpload(file);
+});
+
+// =====================================================
+// 音檔上傳 → Whisper 轉錄
+// =====================================================
+
+/** 上傳音檔到後端 /api/transcribe，回傳文字 */
+async function transcribeFile(file) {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const res = await fetch('/api/transcribe', {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: '伺服器錯誤' }));
+    throw new Error(err.detail || `HTTP ${res.status}`);
+  }
+
+  return await res.json(); // { text, language, duration }
+}
+
+/** 處理使用者選取的音檔 */
+async function handleFileUpload(file) {
+  if (!file) return;
+
+  // UI：進入 loading 狀態
+  elBtnUpload.classList.add('loading');
+  elBtnUpload.disabled = true;
+  elRecordStatus.textContent = `⏳ 辨識中：${file.name}`;
+  elInterimText.textContent = '';
+
+  try {
+    const { text, language, duration } = await transcribeFile(file);
+
+    if (!text || !text.trim()) {
+      showToast('未辨識到任何語音內容');
+      return;
+    }
+
+    // 建立新筆記，標題帶上檔名
+    const baseName = file.name.replace(/\.[^.]+$/, ''); // 去副檔名
+    const header   = `【${baseName}】\n`;
+    createNote(header + text.trim());
+
+    showToast(`✅ 辨識完成（${language}，${duration}秒）`);
+
+  } catch (err) {
+    showToast(`❌ 辨識失敗：${err.message}`);
+    console.error('transcribeFile error:', err);
+  } finally {
+    elBtnUpload.classList.remove('loading');
+    elBtnUpload.disabled = false;
+    elRecordStatus.textContent = '';
+    // 重置 file input，讓同一個檔案可以再次選取
+    elFileInput.value = '';
+  }
+}
 
 // =====================================================
 // 初始化
