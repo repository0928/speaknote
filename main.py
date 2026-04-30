@@ -1,33 +1,23 @@
 """
 SpeakNote - main.py
-FastAPI: Whisper transcription + Groq AI summary + static frontend
+FastAPI: Groq Whisper API transcription + Groq AI summary + static frontend
 """
 
 import os
+import subprocess
 import tempfile
 from pathlib import Path
 
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.staticfiles import StaticFiles
-from faster_whisper import WhisperModel
 from groq import Groq
 from pydantic import BaseModel
 
 app = FastAPI(title="SpeakNote API")
 
 ALLOWED_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".mp4", ".webm"}
-MAX_FILE_SIZE = 50 * 1024 * 1024
-
-# Lazy-loaded model (loaded on first request, not at startup)
-_model = None
-
-def get_model():
-    global _model
-    if _model is None:
-        print("Loading Whisper model...")
-        _model = WhisperModel("tiny", device="cpu", compute_type="int8")
-        print("Whisper model ready")
-    return _model
+MAX_FILE_SIZE = 200 * 1024 * 1024   # 200 MB upload limit
+GROQ_MAX_BYTES = 23 * 1024 * 1024   # 23 MB — Groq hard limit is 25 MB
 
 groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
@@ -36,10 +26,26 @@ class SummarizeRequest(BaseModel):
     text: str
 
 
-# Health check endpoint for Zeabur
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+def compress_audio(src_path: str, dst_path: str) -> None:
+    """Convert audio to mono mp3 at 32kbps using ffmpeg.
+    50 min * 60 s * 32 kbps / 8 = ~11.7 MB — well within Groq's 25 MB limit.
+    """
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", src_path,
+        "-ac", "1",          # mono
+        "-ar", "16000",      # 16 kHz sample rate
+        "-b:a", "32k",       # 32 kbps
+        dst_path
+    ]
+    result = subprocess.run(cmd, capture_output=True, timeout=300)
+    if result.returncode != 0:
+        raise RuntimeError("ffmpeg compression failed: " + result.stderr.decode())
 
 
 @app.post("/api/transcribe")
@@ -50,36 +56,55 @@ async def transcribe(file: UploadFile = File(...)):
 
     content = await file.read()
     if len(content) > MAX_FILE_SIZE:
-        raise HTTPException(status_code=400, detail="File too large (max 50 MB).")
+        raise HTTPException(status_code=400, detail="File too large (max 200 MB).")
 
+    if not os.environ.get("GROQ_API_KEY"):
+        raise HTTPException(status_code=500, detail="GROQ_API_KEY not configured.")
+
+    # Write original file to temp
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(content)
-        tmp_path = tmp.name
+        original_path = tmp.name
+
+    audio_path = original_path
 
     try:
-        whisper = get_model()
+        # Compress if over Groq's size limit
+        if len(content) > GROQ_MAX_BYTES:
+            compressed_path = original_path + "_compressed.mp3"
+            try:
+                compress_audio(original_path, compressed_path)
+                audio_path = compressed_path
+            except Exception as e:
+                raise HTTPException(status_code=500, detail="Audio compression failed: " + str(e))
 
-        def do_transcribe(vad):
-            kwargs = dict(beam_size=5)
-            if vad:
-                kwargs["vad_filter"] = True
-                kwargs["vad_parameters"] = {"min_silence_duration_ms": 500}
-            segs, inf = whisper.transcribe(tmp_path, **kwargs)
-            texts = [s.text.strip() for s in segs if s.text.strip()]
-            return texts, inf
-
+        # Send to Groq Whisper API
         try:
-            texts, info = do_transcribe(vad=True)
-        except Exception:
-            texts, info = do_transcribe(vad=False)
+            with open(audio_path, "rb") as f:
+                filename = Path(audio_path).name
+                transcription = groq_client.audio.transcriptions.create(
+                    file=(filename, f.read()),
+                    model="whisper-large-v3-turbo",
+                    response_format="verbose_json",
+                    prompt="以下是一段語音內容，請完整轉錄。",
+                )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail="Transcription API error: " + str(e))
 
-        if not texts:
-            raise HTTPException(status_code=422, detail="No speech detected.")
+        text = transcription.text.strip() if hasattr(transcription, "text") else ""
+        language = getattr(transcription, "language", "unknown")
+        duration = getattr(transcription, "duration", 0)
+
+        if not text:
+            raise HTTPException(
+                status_code=422,
+                detail="No speech detected. Please check the audio has clear speech."
+            )
 
         return {
-            "text": "\n".join(texts),
-            "language": info.language,
-            "duration": round(info.duration, 1),
+            "text": text,
+            "language": language,
+            "duration": round(float(duration), 1) if duration else 0,
         }
 
     except HTTPException:
@@ -87,10 +112,12 @@ async def transcribe(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail="Transcription failed: " + str(e))
     finally:
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
+        for p in [original_path, original_path + "_compressed.mp3"]:
+            try:
+                if os.path.exists(p):
+                    os.unlink(p)
+            except Exception:
+                pass
 
 
 SYSTEM_PROMPT = (
