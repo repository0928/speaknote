@@ -13,21 +13,33 @@ from faster_whisper import WhisperModel
 from groq import Groq
 from pydantic import BaseModel
 
-# Load Whisper model & Groq client at startup
-print("Loading Whisper model...")
-model = WhisperModel("base", device="cpu", compute_type="int8")
-print("Whisper model ready")
-
-groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
-
 app = FastAPI(title="SpeakNote API")
 
 ALLOWED_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".mp4", ".webm"}
 MAX_FILE_SIZE = 50 * 1024 * 1024
 
+# Lazy-loaded model (loaded on first request, not at startup)
+_model = None
+
+def get_model():
+    global _model
+    if _model is None:
+        print("Loading Whisper model...")
+        _model = WhisperModel("base", device="cpu", compute_type="int8")
+        print("Whisper model ready")
+    return _model
+
+groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+
 
 class SummarizeRequest(BaseModel):
     text: str
+
+
+# Health check endpoint for Zeabur
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
 
 @app.post("/api/transcribe")
@@ -45,12 +57,14 @@ async def transcribe(file: UploadFile = File(...)):
         tmp_path = tmp.name
 
     try:
+        whisper = get_model()
+
         def do_transcribe(vad):
             kwargs = dict(beam_size=5)
             if vad:
                 kwargs["vad_filter"] = True
                 kwargs["vad_parameters"] = {"min_silence_duration_ms": 500}
-            segs, inf = model.transcribe(tmp_path, **kwargs)
+            segs, inf = whisper.transcribe(tmp_path, **kwargs)
             texts = [s.text.strip() for s in segs if s.text.strip()]
             return texts, inf
 
