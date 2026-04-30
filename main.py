@@ -25,7 +25,7 @@ def get_model():
     global _model
     if _model is None:
         print("Loading Whisper model...")
-        _model = WhisperModel("base", device="cpu", compute_type="int8")
+        _model = WhisperModel("tiny", device="cpu", compute_type="int8")
         print("Whisper model ready")
     return _model
 

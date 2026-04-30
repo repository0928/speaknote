@@ -1,6 +1,6 @@
 # =====================================================
 # SpeakNote Dockerfile
-# Python 3.11 + ffmpeg + faster-whisper (base model)
+# Python 3.11 + ffmpeg + faster-whisper (tiny model)
 # =====================================================
 
 FROM python:3.11-slim
@@ -16,8 +16,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 預先下載 Whisper base 模型（build 時下載，避免啟動後等待）
-RUN python -c "from faster_whisper import WhisperModel; WhisperModel('base', device='cpu', compute_type='int8'); print('Model downloaded.')"
+# 預先下載 Whisper tiny 模型（build 時下載，避免啟動後等待）
+RUN python -c "from faster_whisper import WhisperModel; WhisperModel('tiny', device='cpu', compute_type='int8'); print('Model downloaded.')"
 
 # 複製所有專案檔案
 COPY . .
