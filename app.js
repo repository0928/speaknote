@@ -455,17 +455,37 @@ async function transcribeFile(file) {
   return await res.json(); // { text, language, duration }
 }
 
+/** 呼叫後端 /api/summarize，取得 AI 摘要 */
+async function summarizeText(text) {
+  const res = await fetch('/api/summarize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: '摘要失敗' }));
+    throw new Error(err.detail || `HTTP ${res.status}`);
+  }
+
+  const data = await res.json();
+  return data.summary;
+}
+
 /** 處理使用者選取的音檔 */
 async function handleFileUpload(file) {
   if (!file) return;
 
+  const baseName = file.name.replace(/\.[^.]+$/, '');
+
   // UI：進入 loading 狀態
   elBtnUpload.classList.add('loading');
   elBtnUpload.disabled = true;
-  elRecordStatus.textContent = `⏳ 辨識中：${file.name}`;
   elInterimText.textContent = '';
 
   try {
+    // ── 步驟 1：語音轉文字 ──
+    elRecordStatus.textContent = `⏳ 辨識中：${file.name}`;
     const { text, language, duration } = await transcribeFile(file);
 
     if (!text || !text.trim()) {
@@ -473,21 +493,27 @@ async function handleFileUpload(file) {
       return;
     }
 
-    // 建立新筆記，標題帶上檔名
-    const baseName = file.name.replace(/\.[^.]+$/, ''); // 去副檔名
-    const header   = `【${baseName}】\n`;
-    createNote(header + text.trim());
+    // 建立「原始轉錄」筆記
+    const transcriptHeader = `📝 ${baseName}（轉錄）\n${'─'.repeat(24)}\n`;
+    createNote(transcriptHeader + text.trim());
+    showToast(`✅ 辨識完成（${language}，${duration} 秒）`);
 
-    showToast(`✅ 辨識完成（${language}，${duration}秒）`);
+    // ── 步驟 2：AI 摘要 ──
+    elRecordStatus.textContent = '✨ AI 摘要產生中…';
+    const summary = await summarizeText(text.trim());
+
+    // 建立「AI 摘要」筆記
+    const summaryHeader = `✨ ${baseName}（摘要）\n${'─'.repeat(24)}\n`;
+    createNote(summaryHeader + summary);
+    showToast('✨ AI 摘要完成！');
 
   } catch (err) {
-    showToast(`❌ 辨識失敗：${err.message}`);
-    console.error('transcribeFile error:', err);
+    showToast(`❌ ${err.message}`);
+    console.error('handleFileUpload error:', err);
   } finally {
     elBtnUpload.classList.remove('loading');
     elBtnUpload.disabled = false;
     elRecordStatus.textContent = '';
-    // 重置 file input，讓同一個檔案可以再次選取
     elFileInput.value = '';
   }
 }
